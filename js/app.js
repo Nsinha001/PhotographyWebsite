@@ -36,19 +36,68 @@ const imageSets = {
   ]
 };
 const page = document.body.dataset.page;
-let photos = (imageSets[page] || []).map(([title, src], id) => ({ id: String(id), title, src }));
 const gallery = document.querySelector('#gallery');
+
+if (gallery && imageSets[page]) {
+  const titleRow = document.createElement('div');
+  titleRow.className = 'gallery-title-row';
+  const heading = document.querySelector('.page-heading');
+  if (heading) {
+    heading.parentNode.insertBefore(titleRow, heading);
+    titleRow.appendChild(heading);
+  }
+  titleRow.insertAdjacentHTML('beforeend', '<button class="organize-button" type="button" id="organizeButton">Add photos</button>');
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="panel-backdrop" id="panelBackdrop"></div>
+    <aside class="organize-panel" id="organizePanel" aria-hidden="true" aria-labelledby="organizeTitle">
+      <button class="close-button" id="closePanel" type="button" aria-label="Close photo organizer">×</button>
+      <h2 id="organizeTitle">Add your photos</h2>
+      <p>Choose image files to add them to this gallery. Photos are saved in this browser only.</p>
+      <label class="upload-zone" for="fileInput">
+        <strong>Choose photos</strong>
+        <small>JPG, PNG, GIF, or WebP</small>
+        <input id="fileInput" type="file" accept="image/*" multiple>
+      </label>
+      <div id="organizeList"></div>
+      <button class="done-button" id="doneButton" type="button">Done</button>
+    </aside>
+  `);
+}
+
+const storageKey = `photography-site-${page}-photos`;
+let photos = (imageSets[page] || []).map(([title, src], id) => ({ id: String(id), title, src }));
+try {
+  const savedPhotos = JSON.parse(localStorage.getItem(storageKey) || 'null');
+  if (Array.isArray(savedPhotos)) photos = savedPhotos;
+} catch (error) {
+  console.warn('Saved gallery photos could not be loaded.', error);
+}
+
+const escapeHtml = value => String(value).replace(/[&<>"']/g, character => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
+}[character]));
+
 function renderGallery() {
   if (!gallery) return;
-  gallery.innerHTML = photos.map(photo => `<figure class="photo-card"><img src="${photo.src}" alt="${photo.title}" loading="lazy"><figcaption>${photo.title}</figcaption></figure>`).join('');
+  gallery.innerHTML = photos.map(photo => `<figure class="photo-card"><img src="${escapeHtml(photo.src)}" alt="${escapeHtml(photo.title)}" loading="lazy"><figcaption>${escapeHtml(photo.title)}</figcaption></figure>`).join('');
 }
+
+function savePhotos() {
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(photos));
+  } catch (error) {
+    console.error('Photos could not be saved. Try removing a photo or choosing smaller files.', error);
+  }
+}
+
 function renderOrganizer() {
   const list = document.querySelector('#organizeList');
-  list.innerHTML = photos.map((photo, index) => `<div class="organize-item" draggable="true" data-id="${photo.id}"><span>⠿</span><img src="${photo.src}" alt=""><span class="name">${index + 1}. ${photo.title}</span><button class="remove-photo" data-id="${photo.id}">×</button></div>`).join('');
-  list.querySelectorAll('.remove-photo').forEach(button => button.addEventListener('click', () => { photos = photos.filter(photo => photo.id !== button.dataset.id); renderGallery(); renderOrganizer(); }));
+  if (!list) return;
+  list.innerHTML = photos.map((photo, index) => `<div class="organize-item" draggable="true" data-id="${escapeHtml(photo.id)}"><span aria-hidden="true">⠿</span><img src="${escapeHtml(photo.src)}" alt=""><span class="name">${index + 1}. ${escapeHtml(photo.title)}</span><button class="remove-photo" type="button" data-id="${escapeHtml(photo.id)}" aria-label="Remove ${escapeHtml(photo.title)}">×</button></div>`).join('');
+  list.querySelectorAll('.remove-photo').forEach(button => button.addEventListener('click', () => { photos = photos.filter(photo => photo.id !== button.dataset.id); savePhotos(); renderGallery(); renderOrganizer(); }));
   list.querySelectorAll('.organize-item').forEach(item => {
     item.addEventListener('dragstart', () => item.classList.add('dragging'));
-    item.addEventListener('dragend', () => { item.classList.remove('dragging'); photos = [...list.querySelectorAll('.organize-item')].map(row => photos.find(photo => photo.id === row.dataset.id)); renderGallery(); });
+    item.addEventListener('dragend', () => { item.classList.remove('dragging'); photos = [...list.querySelectorAll('.organize-item')].map(row => photos.find(photo => photo.id === row.dataset.id)); savePhotos(); renderGallery(); });
     item.addEventListener('dragover', event => { event.preventDefault(); const dragging = list.querySelector('.dragging'); if (dragging && dragging !== item) list.insertBefore(dragging, event.clientY < item.getBoundingClientRect().top + item.offsetHeight / 2 ? item : item.nextSibling); });
   });
 }
@@ -57,5 +106,15 @@ const panel = document.querySelector('#organizePanel');
 if (panel) {
   const toggle = open => { panel.classList.toggle('open', open); document.querySelector('#panelBackdrop').classList.toggle('open', open); panel.setAttribute('aria-hidden', String(!open)); if (open) renderOrganizer(); };
   document.querySelector('#organizeButton').onclick = () => toggle(true); document.querySelector('#closePanel').onclick = () => toggle(false); document.querySelector('#doneButton').onclick = () => toggle(false); document.querySelector('#panelBackdrop').onclick = () => toggle(false);
-  document.querySelector('#fileInput').onchange = event => [...event.target.files].forEach(file => { if (!file.type.startsWith('image/')) return; const reader = new FileReader(); reader.onload = () => { photos.push({ id: `local-${Date.now()}-${Math.random()}`, title: file.name.replace(/\.[^/.]+$/, ''), src: reader.result }); renderGallery(); renderOrganizer(); }; reader.readAsDataURL(file); });
+  document.querySelector('#fileInput').onchange = event => [...event.target.files].forEach(file => {
+    if (!file.type.startsWith('image/')) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      photos.push({ id: `local-${Date.now()}-${Math.random()}`, title: file.name.replace(/\.[^/.]+$/, ''), src: reader.result });
+      savePhotos();
+      renderGallery();
+      renderOrganizer();
+    };
+    reader.readAsDataURL(file);
+  });
 }
